@@ -31,8 +31,7 @@ GIT_DIR = "/.git/"
 GIT_COMMIT_TYPE = "commit"
 GIT_TREE_TYPE = "tree"
 
-COMMON_FILES = [
-    "index",  # содержит хеши
+GIT_COMMON_FILES = [
     "COMMIT_EDITMSG",
     "config",
     "description",
@@ -309,7 +308,6 @@ class GitDumper(Process):
         pos = url.find(GIT_DIR) + len(GIT_DIR)
         git_base_url, path = url[:pos], url[pos:]
         if path == "index":
-            # TODO: в старых версиях Git хеши можно вытаскивать регулярками?
             for entry in GitIndex(temp_file).get_entries():
                 object_url = self.get_object_url(git_base_url, entry.sha1)
                 print("\033[36mFound {} => {}\033[0m".format(object_url, entry.filename))
@@ -319,6 +317,9 @@ class GitDumper(Process):
                     continue
                 file_url = git_base_url[:-len(GIT_DIR)].rstrip("/") + "/" + entry.filename.lstrip("/")
                 self.queue.put(file_url)
+            # Если index валиден, то выкачиваем остальные файлы
+            for f in GIT_COMMON_FILES:
+                self.queue.put(urljoin(git_base_url, f))
             return
         if re.match("objects/[a-f0-9]{2}/[a-f0-9]{38}$", path):
             self.parse_obj_file(temp_file, git_base_url)
@@ -419,9 +420,9 @@ class GitDumper(Process):
 
 def git_checkout_files(hosts, output_dir):
     cwd = os.path.curdir
-    for v in hosts:
+    for host in hosts:
         try:
-            repo_path = output_dir / v
+            repo_path = output_dir / host
             if not repo_path.exists():
                 continue
             os.chdir(str(repo_path))
@@ -447,9 +448,8 @@ def main(argv=None):
     manager = Manager()
     seen = manager.dict()
 
-    for file in COMMON_FILES:
-        for url in urls:
-            queue.put_nowait(urljoin(url, file))
+    for url in urls:
+        queue.put_nowait(urljoin(url, "index"))
 
     workers = [
         GitDumper(
