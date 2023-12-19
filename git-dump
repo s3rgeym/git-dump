@@ -152,7 +152,8 @@ def parse_args(argv):
 
 
 def normalize_git_url(url):
-    url = url.split("#")[0].split("?")[0]
+    url, *_ = url.split("#")
+    url = url.split("?")[0]
     return (
         ["http://", ""]["://" in url]
         + (url + "/").split(GIT_DIR)[0].rstrip("/")
