@@ -24,7 +24,7 @@ import zlib
 from collections import namedtuple
 from multiprocessing import JoinableQueue, Manager, Process
 from urllib.error import HTTPError
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 from urllib.request import HTTPHandler, HTTPSHandler, Request, build_opener
 
 __version__ = "0.1.0"
@@ -92,6 +92,36 @@ MAX_PARSE_SIZE = 1 << 27  # 128 MiB
 
 print = functools.partial(print, file=sys.stderr)
 
+ASSET_EXTS = (
+    ".css",
+    ".html",
+    ".htm",
+    ".min.js",
+    ".css",
+    ".map",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".gif",
+    ".bmp",
+    ".ico",
+    ".eot",
+    ".ttf",
+    ".ttf2",
+    ".otf",
+    ".psd",
+    ".doc",
+    ".docx",
+    ".pdf",
+    ".mp3",
+    ".mp4",
+    ".mov",
+    ".webm",
+    ".ai",
+    ".swf",
+    ".apk",
+)
+
 
 class ArgumentFormatter(
     argparse.ArgumentDefaultsHelpFormatter,
@@ -141,7 +171,7 @@ def parse_args(argv):
         dest="num_workers",
         help="number of workers",
         type=int,
-        default=max(4, multiprocessing.cpu_count()),
+        default=max(4, multiprocessing.cpu_count() * 2 - 1),
     )
     # parser.add_argument(
     #     "-k",
@@ -150,6 +180,12 @@ def parse_args(argv):
     #     help="skip downloading existings files",
     #     action="store_true",
     # )
+    parser.add_argument(
+        "--download-assets",
+        help="force download assets",
+        action="store_true",
+        default=False,
+    )
     args = parser.parse_args(argv)
     return args
 
@@ -248,6 +284,7 @@ class GitDumper(Process):
         output_path,
         timeout,
         user_agent,
+        force_download_assets,
     ):
         super().__init__()
         self.queue = queue
@@ -255,6 +292,7 @@ class GitDumper(Process):
         self.output_path = output_path
         self.timeout = timeout
         self.user_agent = user_agent
+        self.force_download_assets = force_download_assets
         self.start()
 
     @property
@@ -314,20 +352,32 @@ class GitDumper(Process):
         if path == "index":
             for entry in GitIndex(temp_file).get_entries():
                 object_url = self.get_object_url(git_base_url, entry.sha1)
+
                 print(
                     "\033[36mFound {} => {}\033[0m".format(
                         object_url, entry.filename
                     )
                 )
+
                 self.queue.put(object_url)
+
+                lower_filename = entry.filename.lower()
+
                 # объектный файл может отдаваться как text/html в UTF-8, поэтому из него не получится восстановить данные
-                if entry.filename.endswith(".php"):
+                if lower_filename.endswith(".php"):
                     continue
+
+                if not self.force_download_assets and lower_filename.endswith(
+                    ASSET_EXTS
+                ):
+                    continue
+
                 file_url = (
                     git_base_url[: -len(GIT_DIR)].rstrip("/")
                     + "/"
-                    + entry.filename.lstrip("/")
+                    + entry.filename.lstrip("/").replace(" ", "%20")
                 )
+
                 self.queue.put(file_url)
             # Если index валиден, то выкачиваем остальные файлы
             for f in GIT_COMMON_FILES:
@@ -392,14 +442,20 @@ class GitDumper(Process):
                                     )
                                 )
                         sp = urlsplit(url)
+
                         # hostname = sp.netloc.split(":")[0].strip("[]")
+
                         dest = (
-                            self.output_path / sp.netloc / sp.path.lstrip("/")
+                            self.output_path
+                            / sp.netloc
+                            / unquote(sp.path.lstrip("/"))
                         )
+
                         try:
                             dest.parent.mkdir(parents=True)
                         except FileExistsError:
                             pass
+
                         temp_file.close()
                         # Эта функция работает только в пределах одной файловой системы, те из tmpfs
                         # файл нельзя переместить куда-то в /home
@@ -452,6 +508,7 @@ def git_checkout_files(hosts, output_dir):
 
 def main(argv=None):
     args = parse_args(argv)
+
     urls = args.urls.copy()
 
     if not args.input.isatty():
@@ -474,6 +531,7 @@ def main(argv=None):
             output_path=args.output_dir,
             timeout=args.timeout,
             user_agent=args.user_agent,
+            force_download_assets=args.download_assets,
         )
         for _ in range(args.num_workers)
     ]
