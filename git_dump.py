@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pylint: disable=C,R,W
 """\
 null-dependency git dumper
 """
@@ -11,7 +12,6 @@ import multiprocessing
 import os
 import pathlib
 import re
-import shlex
 import shutil
 import socket
 import ssl
@@ -26,6 +26,9 @@ from multiprocessing import JoinableQueue, Manager, Process
 from urllib.error import HTTPError
 from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPHandler, HTTPSHandler, Request, build_opener
+
+__version__ = "0.1.0"
+__author__ = "Sergey M"
 
 GIT_DIR = "/.git/"
 GIT_COMMIT_TYPE = "commit"
@@ -282,7 +285,7 @@ class GitDumper(Process):
         return urljoin(
             git_url + ["/", ""][git_url.endswith("/")],
             "objects/{}/{}".format(hash[:2], hash[2:]),
-        ) 
+        )
 
     def extract_hashes(self, content, git_base_url):
         for hash in SHA1_RE.findall(content):
@@ -311,12 +314,20 @@ class GitDumper(Process):
         if path == "index":
             for entry in GitIndex(temp_file).get_entries():
                 object_url = self.get_object_url(git_base_url, entry.sha1)
-                print("\033[36mFound {} => {}\033[0m".format(object_url, entry.filename))
+                print(
+                    "\033[36mFound {} => {}\033[0m".format(
+                        object_url, entry.filename
+                    )
+                )
                 self.queue.put(object_url)
                 # объектный файл может отдаваться как text/html в UTF-8, поэтому из него не получится восстановить данные
                 if entry.filename.endswith(".php"):
                     continue
-                file_url = git_base_url[:-len(GIT_DIR)].rstrip("/") + "/" + entry.filename.lstrip("/")
+                file_url = (
+                    git_base_url[: -len(GIT_DIR)].rstrip("/")
+                    + "/"
+                    + entry.filename.lstrip("/")
+                )
                 self.queue.put(file_url)
             # Если index валиден, то выкачиваем остальные файлы
             for f in GIT_COMMON_FILES:
@@ -350,7 +361,7 @@ class GitDumper(Process):
                 url = self.queue.get()
                 if url is None:
                     break
-                #assert GIT_DIR in url
+                # assert GIT_DIR in url
                 if url in self.seen:
                     # print("\033[31mSeen: {}\033[0m".format(url))
                     continue
@@ -366,7 +377,11 @@ class GitDumper(Process):
                                 try:
                                     self.parse_git(temp_file, url)
                                 except DecodeError:
-                                    print("\033[31mNon zlib-deflated data: {}\033[0m".format(url))
+                                    print(
+                                        "\033[31mNon zlib-deflated data: {}\033[0m".format(
+                                            url
+                                        )
+                                    )
                                     continue
                             else:
                                 print(
@@ -480,4 +495,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
