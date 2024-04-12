@@ -3,7 +3,7 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "git-dump"
+name = "git-dump-tool"
 authors = [{name = "Sergey M"}]
 readme = "README.md"
 license = {file = "LICENSE"}

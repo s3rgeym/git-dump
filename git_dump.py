@@ -81,7 +81,7 @@ GIT_COMMON_FILES = [
     "refs/remotes/origin/develop",
 ]
 
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/116.0"
+USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
 REFERER = "https://www.google.com/"
 
