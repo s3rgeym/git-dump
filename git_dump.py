@@ -160,7 +160,7 @@ def parse_args(argv):
         "--output",
         dest="output_dir",
         help="output directory",
-        default=pathlib.Path("dump"),
+        default=pathlib.Path("dumps"),
         type=pathlib.Path,
     )
     parser.add_argument(
