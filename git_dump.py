@@ -28,7 +28,7 @@ from urllib.error import HTTPError
 from urllib.parse import unquote, urljoin, urlsplit
 from urllib.request import HTTPHandler, HTTPSHandler, Request, build_opener
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 __author__ = "Sergey M"
 
 GIT_DIR = "/.git/"
