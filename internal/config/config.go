@@ -41,21 +41,5 @@ func ParseFlags() Config {
 	flag.BoolVar(&config.ForceFetch, "f", false, "Force fetch URLs, even if files already exist")
 	flag.Parse()
 
-	config.CommonGitFiles = []string{
-		"COMMIT_EDITMSG",
-		"config",
-		"description",
-		"FETCH_HEAD",
-		"HEAD",
-		"index",
-		"info/exclude",
-		"info/refs",
-		"logs/HEAD",
-		"objects/info/packs",
-		"ORIG_HEAD",
-		"packed-refs",
-		"refs/remotes/origin/HEAD",
-	}
-
 	return config
 }
