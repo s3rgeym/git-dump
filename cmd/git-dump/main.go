@@ -14,6 +14,22 @@ import (
 	"golang.org/x/time/rate"
 )
 
+var commonGitFiles = []string{
+	"COMMIT_EDITMSG",
+	"config",
+	"description",
+	"FETCH_HEAD",
+	"HEAD",
+	"index",
+	"info/exclude",
+	"info/refs",
+	"logs/HEAD",
+	"objects/info/packs",
+	"ORIG_HEAD",
+	"packed-refs",
+	"refs/remotes/origin/HEAD",
+}
+
 func main() {
 	config := config.ParseFlags()
 	logger.SetupLogger(config.LogLevel)
@@ -45,7 +61,7 @@ func main() {
 			continue
 		}
 		repos = append(repos, repoPath)
-		for _, file := range config.CommonGitFiles {
+		for _, file := range commonGitFiles {
 			targetUrl, err := utils.UrlJoin(baseUrl, file)
 			if err != nil {
 				logger.Errorf("Failed to convert URL %s to target URL for file %s: %v", baseUrl, file, err)
