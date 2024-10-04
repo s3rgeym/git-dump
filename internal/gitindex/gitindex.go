@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"time"
 )
 
@@ -23,43 +24,53 @@ type GitIndexEntry struct {
 	FileName string    // Имя файла
 }
 
+type GitIndex struct {
+	Version uint32
+	Entries []*GitIndexEntry
+}
+
 // ParseGitIndex reads the Git index file and returns a list of entries.
-func ParseGitIndex(r io.Reader) ([]GitIndexEntry, error) {
+func ParseGitIndex(fileName string) (GitIndex, error) {
+	index := GitIndex{}
+	r, err := os.Open(fileName)
+	if err != nil {
+		return index, err
+	}
+
 	// Read the magic number
 	var magic [4]byte
 	if err := binary.Read(r, binary.BigEndian, &magic); err != nil {
-		return nil, fmt.Errorf("failed to read magic number: %w", err)
+		return index, fmt.Errorf("failed to read magic number: %w", err)
 	}
 	if string(magic[:]) != "DIRC" {
-		return nil, fmt.Errorf("invalid magic number: expected 'DIRC', got '%s'", string(magic[:]))
+		return index, fmt.Errorf("invalid magic number: expected 'DIRC', got '%s'", string(magic[:]))
 	}
 
 	// Read the version
-	var version uint32
-	if err := binary.Read(r, binary.BigEndian, &version); err != nil {
-		return nil, fmt.Errorf("failed to read version: %w", err)
+	if err := binary.Read(r, binary.BigEndian, &index.Version); err != nil {
+		return index, fmt.Errorf("failed to read version: %w", err)
 	}
-	if version <= 1 || version > 4 {
-		return nil, fmt.Errorf("unsupported version: %d", version)
+	if index.Version <= 1 || index.Version > 4 {
+		return index, fmt.Errorf("unsupported version: %d", index.Version)
 	}
 
 	// Read the number of entries
 	var numEntries uint32
 	if err := binary.Read(r, binary.BigEndian, &numEntries); err != nil {
-		return nil, fmt.Errorf("failed to read number of entries: %w", err)
+		return index, fmt.Errorf("failed to read number of entries: %w", err)
 	}
 
 	// Read each entry
-	entries := make([]GitIndexEntry, numEntries)
+	// entries := make([]GitIndexEntry, numEntries)
 	for i := uint32(0); i < numEntries; i++ {
-		entry, err := readGitEntry(r, version)
+		entry, err := readGitEntry(r, index.Version)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read entry %d: %w", i, err)
+			return index, fmt.Errorf("failed to read entry %d: %w", i, err)
 		}
-		entries[i] = *entry
+		index.Entries = append(index.Entries, entry)
 	}
 
-	return entries, nil
+	return index, nil
 }
 
 // readGitEntry reads a single Git index entry from the provided reader.

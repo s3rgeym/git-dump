@@ -13,42 +13,34 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/s3rgeym/git-dump/internal/gitindex"
 	"github.com/s3rgeym/git-dump/internal/logger"
 )
 
-var hashRegex = regexp.MustCompile(`\b(?:pack-)?[a-f0-9]{40}\b`)
 var objectNameRegex = regexp.MustCompile(`/objects/[a-f0-9]{2}/[a-f0-9]{38}$`)
+var hashRegex = regexp.MustCompile(`\b(?:pack-)?[a-f0-9]{40}\b`)
 var refsRegex = regexp.MustCompile(`\brefs(?:/[a-z0-9_.-]+)+`)
 var htmlContentRegex = regexp.MustCompile(`(?i)<html`)
 
-func ExtractGitPaths(fileName string) ([]string, error) {
+func GetObjectsAndRefs(fileName string) ([]string, error) {
 	file, err := os.Open(fileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", fileName, err)
 	}
 	defer file.Close()
 
-	if strings.HasSuffix(fileName, "/index") {
-		entries, err := gitindex.ParseGitIndex(file)
+	data, err := ReadFile(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file %s: %w", fileName, err)
+	}
+
+	if objectNameRegex.MatchString(fileName) {
+		data, err = decompressObjectFile(bytes.NewReader(data))
+
 		if err != nil {
-			os.Remove(fileName)
-			return nil, fmt.Errorf("failed to parse Git index file %s: %w", fileName, err)
-		}
-		res := make([]string, 0, len(entries))
-		for _, entry := range entries {
-			logger.Debugf("Found entry in %s: %s => %s", fileName, entry.Sha1, entry.FileName)
-			res = append(res, sha1ToPath(entry.Sha1))
-		}
-		return res, nil
-	} else if objectNameRegex.MatchString(fileName) {
-		data, err := decompressObjectFile(file)
-		if err != nil {
-			os.Remove(fileName)
 			return nil, fmt.Errorf("failed to decompress object file %s: %w", fileName, err)
 		}
 
-		objectType, _, err := parseObjectType(data)
+		objectType, _, err := parseObjectHeader(data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse object type for file %s: %w", fileName, err)
 		}
@@ -57,22 +49,32 @@ func ExtractGitPaths(fileName string) ([]string, error) {
 			logger.Debugf("Skipping parsing blob file: %s", fileName)
 			return nil, nil
 		}
-
-		return parseHashesAndRefs(data), nil
-	}
-	data, err := ReadFile(file)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file %s: %w", fileName, err)
 	}
 
 	if htmlContentRegex.Match(data) {
-		os.Remove(fileName)
 		return nil, fmt.Errorf("file %s contains HTML, removing", fileName)
 	}
-	return parseHashesAndRefs(data), nil
+
+	ret := make([]string, 0)
+	matches := hashRegex.FindAllString(string(data), -1)
+	for _, hash := range matches {
+		if strings.HasPrefix(hash, "pack-") {
+			for _, extension := range []string{"pack", "idx"} {
+				ret = append(ret, fmt.Sprintf("objects/pack/%s.%s", hash, extension))
+			}
+		} else if hash != "0000000000000000000000000000000000000000" {
+			ret = append(ret, Sha1ToPath(hash))
+		}
+	}
+	ret = append(ret, refsRegex.FindAllString(string(data), -1)...)
+	return ret, nil
 }
 
-func sha1ToPath(hash string) string {
+// func isZlibCompressed(data []byte) bool {
+// 	return len(data) > 2 && data[0] == 0x78 && (data[1] == 0x9C || data[1] == 0xDA)
+// }
+
+func Sha1ToPath(hash string) string {
 	return fmt.Sprintf("objects/%s/%s", hash[:2], hash[2:])
 }
 
@@ -100,7 +102,7 @@ func decompressObjectFile(reader io.Reader) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func parseObjectType(data []byte) (string, int, error) {
+func parseObjectHeader(data []byte) (string, int, error) {
 	spaceIndex := bytes.IndexByte(data, ' ')
 	if spaceIndex == -1 {
 		return "", 0, fmt.Errorf("invalid object header")
@@ -115,22 +117,6 @@ func parseObjectType(data []byte) (string, int, error) {
 		return "", 0, fmt.Errorf("invalid object size: %w", err)
 	}
 	return objectType, size, nil
-}
-
-func parseHashesAndRefs(data []byte) []string {
-	ret := make([]string, 0)
-	matches := hashRegex.FindAllString(string(data), -1)
-	for _, hash := range matches {
-		if strings.HasPrefix(hash, "pack-") {
-			for _, extension := range []string{"pack", "idx"} {
-				ret = append(ret, fmt.Sprintf("objects/pack/%s.%s", hash, extension))
-			}
-		} else if hash != "0000000000000000000000000000000000000000" {
-			ret = append(ret, sha1ToPath(hash))
-		}
-	}
-	ret = append(ret, refsRegex.FindAllString(string(data), -1)...)
-	return ret
 }
 
 func ReadLines(filePath string) ([]string, error) {

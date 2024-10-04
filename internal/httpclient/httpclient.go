@@ -13,13 +13,18 @@ import (
 	"github.com/hashicorp/go-retryablehttp"
 	"github.com/s3rgeym/git-dump/internal/config"
 	"github.com/s3rgeym/git-dump/internal/logger"
+	"golang.org/x/time/rate"
 )
 
-type RetryableHttpClient struct {
+type HttpClient struct {
 	*retryablehttp.Client
+	config     config.Config
+	mutex      *sync.Mutex
+	hostErrors map[string]int
+	rl         *rate.Limiter
 }
 
-func CreateHttpClient(config config.Config) *RetryableHttpClient {
+func NewHttpClient(config config.Config) *HttpClient {
 	client := retryablehttp.NewClient()
 	client.RetryMax = config.MaxRetries
 	client.HTTPClient.Timeout = config.ConnTimeout
@@ -44,44 +49,41 @@ func CreateHttpClient(config config.Config) *RetryableHttpClient {
 		client.HTTPClient.Transport.(*http.Transport).Proxy = http.ProxyURL(proxyUrlParsed)
 	}
 
-	return &RetryableHttpClient{client}
+	rl := rate.NewLimiter(rate.Limit(config.MaxRPS), config.MaxRPS)
+
+	return &HttpClient{
+		Client:     client,
+		config:     config,
+		mutex:      &sync.Mutex{},
+		hostErrors: make(map[string]int),
+		rl:         rl,
+	}
 }
 
-func FetchFile(client *RetryableHttpClient, targetUrl, fileName string, mutex *sync.Mutex, seen *sync.Map, hostErrors map[string]int, config config.Config) error {
-	if !config.ForceFetch {
-		if _, err := os.Stat(fileName); err == nil {
-			logger.Warnf("File %s already exists, skipping fetch", fileName)
-			return nil
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("failed to check file existence: %w", err)
-		}
-	}
-
-	if _, ok := seen.Load(targetUrl); ok {
-		logger.Debugf("URL %s is already seen, skipping", targetUrl)
-		return nil
-	}
-
+func (c *HttpClient) FetchFile(targetUrl, fileName string) error {
 	host, err := extractHost(targetUrl)
 	if err != nil {
 		return fmt.Errorf("failed to extract host: %w", err)
 	}
 
-	mutex.Lock()
-	if value, ok := hostErrors[host]; ok && value >= config.MaxHostErrors {
-		mutex.Unlock()
-		logger.Warnf("Skipping host %s due to too many errors", host)
-		return nil
+	c.mutex.Lock()
+	if value, ok := c.hostErrors[host]; ok && value >= c.config.MaxHostErrors {
+		c.mutex.Unlock()
+		return fmt.Errorf("skipping host %s due to too many errors", host)
 	}
-	mutex.Unlock()
+	c.mutex.Unlock()
 
-	logger.Infof("Fetching URL: %s", targetUrl)
+	if err := c.rl.Wait(context.TODO()); err != nil {
+		return fmt.Errorf("error waiting for rate limiter: %w", err)
+	}
+
+	logger.Debugf("Fetching URL: %s", targetUrl)
 
 	req, err := retryablehttp.NewRequest("GET", targetUrl, nil)
 	if err != nil {
-		mutex.Lock()
-		hostErrors[host]++
-		mutex.Unlock()
+		c.mutex.Lock()
+		c.hostErrors[host]++
+		c.mutex.Unlock()
 		return fmt.Errorf("failed to create request for URL %s: %w", targetUrl, err)
 	}
 
@@ -89,27 +91,26 @@ func FetchFile(client *RetryableHttpClient, targetUrl, fileName string, mutex *s
 		"Accept-Language": "en-US,en;q=0.9",
 		"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
 		"Referer":         "https://www.google.com/",
-		"User-Agent":      config.UserAgent,
+		"User-Agent":      c.config.UserAgent,
 	}
 
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
 
-	ctx, cancel := context.WithTimeout(req.Context(), config.RequestTimeout)
+	ctx, cancel := context.WithTimeout(req.Context(), c.config.RequestTimeout)
 	defer cancel()
 
 	req = req.WithContext(ctx)
 
-	resp, err := client.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
-		mutex.Lock()
-		hostErrors[host]++
-		mutex.Unlock()
+		c.mutex.Lock()
+		c.hostErrors[host]++
+		c.mutex.Unlock()
 		return fmt.Errorf("failed to fetch URL %s: %w", targetUrl, err)
 	}
 	defer resp.Body.Close()
-	seen.Store(targetUrl, true)
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("received bad HTTP status %d for URL %s", resp.StatusCode, targetUrl)
@@ -119,7 +120,7 @@ func FetchFile(client *RetryableHttpClient, targetUrl, fileName string, mutex *s
 		return fmt.Errorf("failed to save file %s: %w", fileName, err)
 	}
 
-	logger.Infof("File %s saved successfully", fileName)
+	//logger.Infof("File %s saved successfully", fileName)
 	return nil
 }
 
