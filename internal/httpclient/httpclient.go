@@ -60,21 +60,21 @@ func NewHttpClient(config config.Config) *HttpClient {
 	}
 }
 
-func (c *HttpClient) FetchFile(targetUrl, fileName string) error {
+func (c *HttpClient) Fetch(targetUrl string) (*http.Response, context.CancelFunc, error) {
 	host, err := extractHost(targetUrl)
 	if err != nil {
-		return fmt.Errorf("failed to extract host: %w", err)
+		return nil, nil, fmt.Errorf("failed to extract host: %w", err)
 	}
 
 	c.mutex.Lock()
 	if value, ok := c.hostErrors[host]; ok && value >= c.config.MaxHostErrors {
 		c.mutex.Unlock()
-		return fmt.Errorf("skipping host %s due to too many errors", host)
+		return nil, nil, fmt.Errorf("skipping host %s due to too many errors", host)
 	}
 	c.mutex.Unlock()
 
 	if err := c.rl.Wait(context.TODO()); err != nil {
-		return fmt.Errorf("error waiting for rate limiter: %w", err)
+		return nil, nil, fmt.Errorf("error waiting for rate limiter: %w", err)
 	}
 
 	logger.Debugf("Fetching URL: %s", targetUrl)
@@ -84,7 +84,7 @@ func (c *HttpClient) FetchFile(targetUrl, fileName string) error {
 		c.mutex.Lock()
 		c.hostErrors[host]++
 		c.mutex.Unlock()
-		return fmt.Errorf("failed to create request for URL %s: %w", targetUrl, err)
+		return nil, nil, fmt.Errorf("failed to create request for URL %s: %w", targetUrl, err)
 	}
 
 	headers := map[string]string{
@@ -99,8 +99,6 @@ func (c *HttpClient) FetchFile(targetUrl, fileName string) error {
 	}
 
 	ctx, cancel := context.WithTimeout(req.Context(), c.config.RequestTimeout)
-	defer cancel()
-
 	req = req.WithContext(ctx)
 
 	resp, err := c.Do(req)
@@ -108,23 +106,22 @@ func (c *HttpClient) FetchFile(targetUrl, fileName string) error {
 		c.mutex.Lock()
 		c.hostErrors[host]++
 		c.mutex.Unlock()
-		return fmt.Errorf("failed to fetch URL %s: %w", targetUrl, err)
+		cancel()
+		return nil, nil, fmt.Errorf("failed to fetch URL %s: %w", targetUrl, err)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("received bad HTTP status %d for URL %s", resp.StatusCode, targetUrl)
+		resp.Body.Close()
+		cancel()
+		return nil, nil, fmt.Errorf("received bad HTTP status %d for URL %s", resp.StatusCode, targetUrl)
 	}
 
-	if err := saveResponse(resp, fileName); err != nil {
-		return fmt.Errorf("failed to save file %s: %w", fileName, err)
-	}
-
-	//logger.Infof("File %s saved successfully", fileName)
-	return nil
+	return resp, cancel, nil
 }
 
-func saveResponse(resp *http.Response, fileName string) error {
+func (c *HttpClient) SaveResponse(resp *http.Response, fileName string) error {
+	defer resp.Body.Close()
+
 	err := os.MkdirAll(filepath.Dir(fileName), 0755)
 	if err != nil {
 		return fmt.Errorf("failed to create directory for file %s: %w", fileName, err)
@@ -140,7 +137,22 @@ func saveResponse(resp *http.Response, fileName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to save file %s: %w", fileName, err)
 	}
+
 	return nil
+}
+
+func (c *HttpClient) FetchFile(targetUrl, fileName string) (bool, error) {
+	resp, cancel, err := c.Fetch(targetUrl)
+	if err != nil {
+		return false, err
+	}
+	defer cancel()
+	defer resp.Body.Close()
+	if err := c.SaveResponse(resp, fileName); err != nil {
+		return false, fmt.Errorf("failed to save file %s: %w", fileName, err)
+	}
+
+	return true, nil
 }
 
 func extractHost(urlStr string) (string, error) {
