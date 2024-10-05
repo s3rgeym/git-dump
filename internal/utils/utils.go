@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/zlib"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -20,22 +21,16 @@ var objectNameRegex = regexp.MustCompile(`/objects/[a-f0-9]{2}/[a-f0-9]{38}$`)
 var hashRegex = regexp.MustCompile(`\b(?:pack-)?[a-f0-9]{40}\b`)
 var refsRegex = regexp.MustCompile(`\brefs(?:/[a-z0-9_.-]+)+`)
 var htmlContentRegex = regexp.MustCompile(`(?i)<html`)
+var linkRegex = regexp.MustCompile(`<a href="([^"]+)`)
 
-func GetObjectsAndRefs(fileName string) ([]string, error) {
-	file, err := os.Open(fileName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file %s: %w", fileName, err)
-	}
-	defer file.Close()
-
-	data, err := ReadFile(file)
+func GetHashesAndRefs(fileName string) ([]string, error) {
+	data, err := os.ReadFile(fileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", fileName, err)
 	}
 
 	if objectNameRegex.MatchString(fileName) {
 		data, err = decompressObjectFile(bytes.NewReader(data))
-
 		if err != nil {
 			return nil, fmt.Errorf("failed to decompress object file %s: %w", fileName, err)
 		}
@@ -55,6 +50,10 @@ func GetObjectsAndRefs(fileName string) ([]string, error) {
 		return nil, fmt.Errorf("file %s contains HTML, removing", fileName)
 	}
 
+	return extractObjectsAndRefs(data), nil
+}
+
+func extractObjectsAndRefs(data []byte) []string {
 	ret := make([]string, 0)
 	matches := hashRegex.FindAllString(string(data), -1)
 	for _, hash := range matches {
@@ -67,24 +66,11 @@ func GetObjectsAndRefs(fileName string) ([]string, error) {
 		}
 	}
 	ret = append(ret, refsRegex.FindAllString(string(data), -1)...)
-	return ret, nil
+	return ret
 }
-
-// func isZlibCompressed(data []byte) bool {
-// 	return len(data) > 2 && data[0] == 0x78 && (data[1] == 0x9C || data[1] == 0xDA)
-// }
 
 func Sha1ToPath(hash string) string {
 	return fmt.Sprintf("objects/%s/%s", hash[:2], hash[2:])
-}
-
-func ReadFile(file *os.File) ([]byte, error) {
-	var buffer bytes.Buffer
-	if _, err := io.Copy(&buffer, file); err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
-	}
-
-	return buffer.Bytes(), nil
 }
 
 func decompressObjectFile(reader io.Reader) ([]byte, error) {
@@ -98,7 +84,6 @@ func decompressObjectFile(reader io.Reader) ([]byte, error) {
 	if _, err := io.Copy(&buffer, zlibReader); err != nil {
 		return nil, fmt.Errorf("failed to read zlib-compressed object: %w", err)
 	}
-
 	return buffer.Bytes(), nil
 }
 
@@ -157,27 +142,46 @@ func NormalizeUrl(u string) (string, error) {
 	return u, nil
 }
 
-func UrlJoin(baseURL, additionalPath string) (string, error) {
+// func UrlJoin(baseURL, additionalPath string) (string, error) {
+// 	base, err := url.Parse(baseURL)
+// 	if err != nil {
+// 		return "", fmt.Errorf("error parsing base URL: %w", err)
+// 	}
+
+// 	additional, err := url.Parse(additionalPath)
+// 	if err != nil {
+// 		return "", fmt.Errorf("error parsing additional path: %w", err)
+// 	}
+
+// 	joinedPath := base.Path
+// 	if !strings.HasSuffix(base.Path, "/") && !strings.HasPrefix(additional.Path, "/") {
+// 		joinedPath += "/"
+// 	}
+// 	joinedPath += strings.TrimPrefix(additional.Path, "/")
+
+// 	base.Path = joinedPath
+// 	newURL := base.String()
+
+// 	return newURL, nil
+// }
+
+func UrlJoin(baseURL string, paths ...string) (string, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil {
 		return "", fmt.Errorf("error parsing base URL: %w", err)
 	}
 
-	additional, err := url.Parse(additionalPath)
-	if err != nil {
-		return "", fmt.Errorf("error parsing additional path: %w", err)
+	for _, path := range paths {
+		additional, err := url.Parse(path)
+		if err != nil {
+			return "", fmt.Errorf("error parsing additional path: %w", err)
+		}
+
+		// Нормализуем относительный путь относительно базового URL
+		base = base.ResolveReference(additional)
 	}
 
-	joinedPath := base.Path
-	if !strings.HasSuffix(base.Path, "/") && !strings.HasPrefix(additional.Path, "/") {
-		joinedPath += "/"
-	}
-	joinedPath += strings.TrimPrefix(additional.Path, "/")
-
-	base.Path = joinedPath
-	newURL := base.String()
-
-	return newURL, nil
+	return base.String(), nil
 }
 
 func UrlToLocalPath(targetUrl string, outputDir string) (string, error) {
@@ -187,4 +191,29 @@ func UrlToLocalPath(targetUrl string, outputDir string) (string, error) {
 	}
 	host := u.Hostname()
 	return filepath.Join(outputDir, host, strings.TrimLeft(u.Path, "/")), nil
+}
+
+func ExtractLinks(htmlContent string) []string {
+	matches := linkRegex.FindAllStringSubmatch(htmlContent, -1)
+	var links []string
+	for _, match := range matches {
+		if len(match) > 1 {
+			links = append(links, match[1])
+		}
+	}
+	return links
+}
+
+func GetMimeType(ct string) (string, error) {
+	mime := strings.Split(ct, ";")[0]
+	parts := strings.Split(mime, "/")
+	if len(parts) != 2 {
+		return "", errors.New("invalid mime type")
+	}
+	return strings.ToLower(parts[0]) + "/" + strings.ToLower(parts[1]), nil
+}
+
+func FileExists(fileName string) bool {
+	_, err := os.Stat(fileName)
+	return err == nil
 }

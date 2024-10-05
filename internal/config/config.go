@@ -41,7 +41,7 @@ func ParseFlags() Config {
 	flag.DurationVar(&config.ConnTimeout, "connect-timeout", 10*time.Second, "Connection timeout duration")
 	flag.DurationVar(&config.HeaderTimeout, "header-timeout", 5*time.Second, "Read Header timeout duration")
 	flag.DurationVar(&config.KeepAliveTimeout, "keepalive-timeout", 90*time.Second, "Keep-Alive timeout duration")
-	flag.DurationVar(&config.RequestTimeout, "request-timeout", 60*time.Second, "Total request timeout duration")
+	flag.DurationVar(&config.RequestTimeout, "request-timeout", 30*time.Second, "Total request timeout duration")
 	flag.IntVar(&config.MaxRetries, "retries", 3, "Maximum number of retries for each request")
 	flag.IntVar(&config.MaxHostErrors, "maxhe", 5, "Maximum number of errors per host before skipping")
 	flag.IntVar(&config.WorkersNum, "w", 50, "Number of worker goroutines")
